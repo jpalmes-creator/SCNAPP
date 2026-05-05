@@ -6,12 +6,16 @@
 // por funcionalidad (cotizador, productos, fichas, etc).
 // ============================================================
 
+import { initSentry, setSentryUser, captureError } from './core/sentry.js';
 import { sb } from './core/supabase.js';
 import { showToast, openModal, closeModal } from './core/ui.js';
 import { $$, compImg, f2b64, cleanPathPart, uniqueJpgPath } from './core/utils.js';
 import { SCN_LOGO } from './core/logo.js';
 import { buildPDF, buildFichaPage } from './core/pdf.js';
-// SCN_LOGO se importa desde ./core/logo.js
+
+// Inicializar tracking de errores ANTES de todo
+initSentry();
+
 // Email config
 
 const EMAIL_FROM = 'SCN Neumáticos <onboarding@resend.dev>';
@@ -78,6 +82,7 @@ async function doLogout(){await sb.auth.signOut();}
 
 async function onLogin(user){
   ME=user;
+  setSentryUser(user); // asocia el usuario logueado al error tracking
   for(let i=0;i<3;i++){
     const{data}=await sb.from('usuarios').select('*').eq('id',user.id).maybeSingle();
     if(data){ROLE=data.rol||'vendedor';UNAME=data.nombre||user.email.split('@')[0];break;}
