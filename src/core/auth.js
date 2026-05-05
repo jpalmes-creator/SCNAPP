@@ -101,11 +101,18 @@ export function showLogin() {
 async function onLogin(user) {
   state.ME = user;
   setSentryUser(user);
+  // Debug: exponer state y sb a window para inspección manual desde DevTools
+  window.state = state;
+  window.sb = sb;
+  console.log('[auth] Login user:', { id: user.id, email: user.email });
 
   // Buscar rol en tabla `usuarios` (con retry por si la fila aún no se replicó)
   state.ROLE = null;
+  let lastError = null;
   for (let i = 0; i < 3; i++) {
-    const { data } = await sb.from('usuarios').select('*').eq('id', user.id).maybeSingle();
+    const { data, error } = await sb.from('usuarios').select('*').eq('id', user.id).maybeSingle();
+    console.log(`[auth] Intento ${i + 1} usuarios query:`, { data, error });
+    if (error) lastError = error;
     if (data) {
       state.ROLE = data.rol || 'vendedor';
       state.UNAME = data.nombre || user.email.split('@')[0];
@@ -113,14 +120,17 @@ async function onLogin(user) {
     }
     await new Promise(r => setTimeout(r, 500));
   }
+  if (lastError) console.error('[auth] Error consultando usuarios:', lastError);
 
   // Fallback si no hay registro en `usuarios`: deducir por email
   if (!state.ROLE) {
+    console.warn('[auth] No se encontró rol en usuarios — usando fallback por email');
     const em = user.email.toLowerCase();
     if (em === 'pablo@scnchile.com') { state.ROLE = 'gerente'; state.UNAME = 'Pablo'; }
-    else if (em === 'juan.palmess@gmail.com') { state.ROLE = 'admin'; state.UNAME = 'JP'; }
+    else if (em === 'juan.palmess@gmail.com' || em === 'jpalmes@scnchile.com') { state.ROLE = 'admin'; state.UNAME = 'JP'; }
     else { state.ROLE = 'vendedor'; state.UNAME = em.split('@')[0]; }
   }
+  console.log('[auth] Final state.ROLE:', state.ROLE);
 
   await _onLoggedIn();
 }
