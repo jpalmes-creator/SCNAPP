@@ -35,4 +35,24 @@ setInterval(() => {
   sb.auth.refreshSession().catch(e => console.warn('[supabase] refresh failed:', e.message));
 }, 5 * 60 * 1000);
 
+// Cuando la pestaña vuelve a primer plano, refrescamos la sesión inmediatamente
+// (cubre el caso clásico de "abrí la app, dejé el tab inactivo, volví y no responde")
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    console.log('[supabase] tab visible — refreshing session');
+    sb.auth.refreshSession().catch(e => console.warn('[supabase] refresh on visibility failed:', e.message));
+  }
+});
+
+/**
+ * Helper: envuelve una promesa con timeout. Si no completa en `ms`,
+ * rechaza con error. Útil para llamadas a Supabase que pueden colgarse.
+ */
+export function withTimeout(promise, ms = 15000, label = 'op') {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`Timeout ${ms}ms en ${label}`)), ms)),
+  ]);
+}
+
 export { sb, SB_URL, SB_KEY };

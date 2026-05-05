@@ -12,7 +12,7 @@
 // ============================================================
 
 import { state, clearPreview } from '../core/state.js';
-import { sb } from '../core/supabase.js';
+import { sb, withTimeout } from '../core/supabase.js';
 import { showToast } from '../core/ui.js';
 import { buildPDF, buildFichaPage } from '../core/pdf.js';
 import {
@@ -95,7 +95,22 @@ export async function saveQ(estado, qItems = null) {
   let cot = null, lastError = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     const numero = state.QNUM;
-    const { data, error } = await sb.from('cotizaciones').insert({ numero, ...payload }).select().single();
+    let data, error;
+    try {
+      ({ data, error } = await withTimeout(
+        sb.from('cotizaciones').insert({ numero, ...payload }).select().single(),
+        15000,
+        'insert cotizaciones',
+      ));
+    } catch (e) {
+      console.error('[saveQ] timeout/error:', e);
+      lastError = { message: e.message };
+      // Si fue timeout, refrescar sesión y retry
+      if (e.message?.includes('Timeout')) {
+        try { await sb.auth.refreshSession(); } catch (re) { console.warn('refresh fail:', re); }
+      }
+      continue;
+    }
     if (!error) { cot = data; break; }
     lastError = error;
     if (error.code === '23505' || (error.message || '').toLowerCase().includes('duplicate')) {
