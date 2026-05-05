@@ -21,11 +21,30 @@ if (!SB_URL || !SB_KEY) {
 // `supabase` viene del CDN cargado en index.html (<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2">)
 // Por eso lo accedemos desde window.supabase. En Fase 3 reemplazaremos esto por
 // import { createClient } from '@supabase/supabase-js' (cuando movamos a npm).
+
+// Fetch con AbortController. Sin esto, cuando Supabase se cuelga, el request
+// queda flotando en el background bloqueando los siguientes intentos. El timeout
+// de Promise.race rechazaba la promesa pero el fetch real seguía pegado consumiendo
+// la conexión, por eso el segundo intento también colgaba. Con AbortController
+// el fetch se cancela de verdad y libera la conexión para el retry.
+const fetchWithAbort = (input, init = {}) => {
+  const ctrl = new AbortController();
+  const tid = setTimeout(() => ctrl.abort(), 12000);
+  // Si el caller ya pasó un signal, lo respetamos junto con el nuestro
+  const signal = init.signal && typeof AbortSignal.any === 'function'
+    ? AbortSignal.any([init.signal, ctrl.signal])
+    : ctrl.signal;
+  return fetch(input, { ...init, signal }).finally(() => clearTimeout(tid));
+};
+
 const sb = window.supabase.createClient(SB_URL, SB_KEY, {
   auth: {
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: false,
+  },
+  global: {
+    fetch: fetchWithAbort,
   },
 });
 

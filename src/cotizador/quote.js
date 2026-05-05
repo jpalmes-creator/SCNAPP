@@ -106,9 +106,14 @@ export async function saveQ(estado, qItems = null) {
     } catch (e) {
       console.error('[saveQ] timeout/error:', e);
       lastError = { message: e.message };
-      timeoutCount++;
-      // 2 timeouts seguidos = conexión muerta, recargar la página
-      if (timeoutCount >= 2 && e.message?.includes('Timeout')) {
+      // Considerar tanto timeout de Promise.race como AbortError del fetch
+      const isStuck = e.message?.includes('Timeout')
+        || e.name === 'AbortError'
+        || e.message?.includes('aborted')
+        || e.message?.includes('Failed to fetch');
+      if (isStuck) timeoutCount++;
+      // 2 fallos de red seguidos = conexión muerta, recargar la página
+      if (timeoutCount >= 2 && isStuck) {
         showToast('🔄 Conexión perdida — reconectando…');
         // Guardar carrito en localStorage para restaurarlo después del reload
         try {
@@ -123,8 +128,8 @@ export async function saveQ(estado, qItems = null) {
         setTimeout(() => location.reload(), 1500);
         return null;
       }
-      // Primer timeout: refrescar sesión y reintentar
-      if (e.message?.includes('Timeout')) {
+      // Primer fallo de red: refrescar sesión y reintentar
+      if (isStuck) {
         try { await sb.auth.refreshSession(); } catch (re) { console.warn('refresh fail:', re); }
       }
       continue;
