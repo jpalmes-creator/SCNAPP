@@ -92,6 +92,30 @@ async function showApp(){
   renderCat();renderSvcs();buildDL();await loadQNum();
   if(isMgr)loadABadge();
   const sel=document.getElementById('dmes');if(sel)sel.value=new Date().getMonth();
+
+  // Restaurar carrito si veníamos de un reload por conexión perdida
+  try {
+    const recoveryQ = localStorage.getItem('_recoveryQ');
+    const recoveryClient = localStorage.getItem('_recoveryClient');
+    if (recoveryQ) {
+      state.Q = JSON.parse(recoveryQ);
+      localStorage.removeItem('_recoveryQ');
+      if (recoveryClient) {
+        const cli = JSON.parse(recoveryClient);
+        if (cli.cl) document.getElementById('qcl').value = cli.cl;
+        if (cli.rt) document.getElementById('qrt').value = cli.rt;
+        if (cli.at) document.getElementById('qat').value = cli.at;
+        if (cli.em) document.getElementById('qem').value = cli.em;
+        localStorage.removeItem('_recoveryClient');
+      }
+      // Re-render con el carrito recuperado
+      const { rQ } = await import('./cotizador/cart.js');
+      rQ();
+      const { renderCat } = await import('./cotizador/catalog.js');
+      renderCat();
+      showToast('✓ Carrito recuperado tras reconexión');
+    }
+  } catch (e) { console.error('Recovery error:', e); }
 }
 
 

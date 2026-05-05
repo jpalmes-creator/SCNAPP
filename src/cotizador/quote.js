@@ -93,19 +93,37 @@ export async function saveQ(estado, qItems = null) {
 
   // Reintentar hasta 3 veces si choca el número (caso multi-usuario)
   let cot = null, lastError = null;
+  let timeoutCount = 0;
   for (let attempt = 0; attempt < 3; attempt++) {
     const numero = state.QNUM;
     let data, error;
     try {
       ({ data, error } = await withTimeout(
         sb.from('cotizaciones').insert({ numero, ...payload }).select().single(),
-        15000,
+        10000,
         'insert cotizaciones',
       ));
     } catch (e) {
       console.error('[saveQ] timeout/error:', e);
       lastError = { message: e.message };
-      // Si fue timeout, refrescar sesión y retry
+      timeoutCount++;
+      // 2 timeouts seguidos = conexión muerta, recargar la página
+      if (timeoutCount >= 2 && e.message?.includes('Timeout')) {
+        showToast('🔄 Conexión perdida — reconectando…');
+        // Guardar carrito en localStorage para restaurarlo después del reload
+        try {
+          localStorage.setItem('_recoveryQ', JSON.stringify(state.Q));
+          localStorage.setItem('_recoveryClient', JSON.stringify({
+            cl: document.getElementById('qcl').value,
+            rt: document.getElementById('qrt').value,
+            at: document.getElementById('qat').value,
+            em: document.getElementById('qem').value,
+          }));
+        } catch (e) {}
+        setTimeout(() => location.reload(), 1500);
+        return null;
+      }
+      // Primer timeout: refrescar sesión y reintentar
       if (e.message?.includes('Timeout')) {
         try { await sb.auth.refreshSession(); } catch (re) { console.warn('refresh fail:', re); }
       }
