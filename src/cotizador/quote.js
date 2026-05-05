@@ -144,7 +144,14 @@ export async function sendAppr() {
   const old = btn ? btn.innerHTML : '';
   setQuoteBusy(true);
   if (btn) btn.textContent = 'Enviando...';
+  // Failsafe: si algo se cuelga, liberar el lock a los 30s sí o sí
+  const lockTimeout = setTimeout(() => {
+    console.warn('[quote] sendAppr lock timeout 30s — forzando release');
+    setQuoteBusy(false);
+    if (btn) btn.innerHTML = old;
+  }, 30000);
   try {
+    console.log('[quote] sendAppr start');
     const c = await saveQ('pendiente', qSnap);
     if (c) {
       showToast('✓ Enviada para aprobación');
@@ -156,8 +163,10 @@ export async function sendAppr() {
     showToast('Error: ' + e.message);
     console.error('sendAppr error:', e);
   } finally {
+    clearTimeout(lockTimeout);
     if (btn) btn.innerHTML = old;
     setQuoteBusy(false);
+    console.log('[quote] sendAppr end — lock released');
   }
 }
 
@@ -170,9 +179,17 @@ export async function genPDF() {
   const old = btn ? btn.innerHTML : '';
   setQuoteBusy(true);
   if (btn) btn.textContent = 'Generando...';
+  // Failsafe: si algo se cuelga, liberar el lock a los 30s sí o sí
+  const lockTimeout = setTimeout(() => {
+    console.warn('[quote] genPDF lock timeout 30s — forzando release');
+    setQuoteBusy(false);
+    if (btn) btn.innerHTML = old;
+  }, 30000);
   try {
+    console.log('[quote] genPDF start — saveQ');
     const cot = await saveQ('borrador', qSnap);
-    if (!cot) return;
+    if (!cot) { console.warn('[quote] genPDF aborted — saveQ returned null'); return; }
+    console.log('[quote] genPDF — cot saved:', cot.numero);
     const email = document.getElementById('qem').value || cot.cliente_email || '';
 
     // Agrupar productos por (marca|modelo|medida) para incluir cada ficha solo una vez
@@ -186,6 +203,7 @@ export async function genPDF() {
 
     let fichasHTML = '';
     if (Object.keys(modelMap).length > 0) {
+      console.log('[quote] genPDF — cargando fichas');
       const { data: fichas, error: fichasErr } = await sb.from('fichas_tecnicas').select('*');
       if (fichasErr) console.error('Error cargando fichas para PDF:', fichasErr);
       Object.values(modelMap).forEach(m => {
@@ -201,13 +219,16 @@ export async function genPDF() {
     const totals = calcQuoteTotals(qSnap);
     const pdfHTML = buildPDF({ ...cot, ...totals }, qSnap);
     const fullHTML = fichasHTML ? pdfHTML.replace('</body></html>', fichasHTML + '</body></html>') : pdfHTML;
+    console.log('[quote] genPDF — abriendo modal');
     openPDF(fullHTML, email, cot.numero, !!email, true);
     showToast('Vista previa lista' + (fichasHTML ? ' (con fichas técnicas)' : ''));
   } catch (e) {
     showToast('Error al generar PDF: ' + e.message);
     console.error('genPDF error:', e);
   } finally {
+    clearTimeout(lockTimeout);
     if (btn) btn.innerHTML = old;
     setQuoteBusy(false);
+    console.log('[quote] genPDF end — lock released');
   }
 }
