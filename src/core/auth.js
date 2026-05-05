@@ -104,9 +104,22 @@ export async function doLogin() {
   }
 }
 
-// ─── Logout ───
+// ─── Logout (con fallback forzado si Supabase no responde) ───
 export async function doLogout() {
-  await sb.auth.signOut();
+  try {
+    await withTimeout(sb.auth.signOut(), 5000, 'logout');
+  } catch (e) {
+    console.warn('[auth] signOut colgado/falló — forzando cleanup local:', e.message);
+    // Si Supabase no responde, limpiamos manualmente la sesión de localStorage
+    // así el usuario al menos puede salir y volver a entrar.
+    try {
+      Object.keys(localStorage)
+        .filter(k => k.startsWith('sb-') || k.includes('supabase'))
+        .forEach(k => localStorage.removeItem(k));
+    } catch (le) { console.warn('[auth] no se pudo limpiar localStorage:', le); }
+  }
+  // Mostramos login sí o sí — no esperamos al onAuthStateChange (que también puede colgar)
+  showLogin();
 }
 
 // ─── Mostrar pantalla de login (cuando no hay sesión o se cierra) ───
