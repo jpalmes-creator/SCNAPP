@@ -127,7 +127,21 @@ export function syncQuoteButtons() {
 
 export function setQuoteBusy(busy) {
   state.QUOTE_BUSY = !!busy;
+  if (busy) state._QUOTE_BUSY_AT = Date.now();
   syncQuoteButtons();
+}
+
+/**
+ * Si el lock quedó pegado más de N segundos, lo liberamos.
+ * Se llama defensivamente al inicio de genPDF/sendAppr para evitar bloqueos.
+ */
+export function maybeReleaseStaleLock(maxAgeMs = 60000) {
+  if (state.QUOTE_BUSY && state._QUOTE_BUSY_AT && (Date.now() - state._QUOTE_BUSY_AT > maxAgeMs)) {
+    console.warn('[cart] Lock estaba pegado hace ' + Math.round((Date.now() - state._QUOTE_BUSY_AT) / 1000) + 's — liberando');
+    state.QUOTE_BUSY = false;
+    state._QUOTE_BUSY_AT = null;
+    syncQuoteButtons();
+  }
 }
 
 // ─── Badge de carrito mobile ───

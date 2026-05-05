@@ -16,7 +16,7 @@ import { sb } from '../core/supabase.js';
 import { showToast } from '../core/ui.js';
 import { buildPDF, buildFichaPage } from '../core/pdf.js';
 import {
-  snapshotQ, calcQuoteTotals, setQuoteBusy, rQ,
+  snapshotQ, calcQuoteTotals, setQuoteBusy, rQ, maybeReleaseStaleLock,
 } from './cart.js';
 import { renderCat, renderSvcs } from './catalog.js';
 import { openPDF } from './pdf-modal.js';
@@ -137,7 +137,7 @@ export async function saveQ(estado, qItems = null) {
 
 // ─── Enviar cotización para aprobación (estado='pendiente') ───
 export async function sendAppr() {
-  if (state.QUOTE_BUSY) return;
+  maybeReleaseStaleLock(); if (state.QUOTE_BUSY) return;
   const qSnap = snapshotQ();
   if (!qSnap.length) { showToast('Agregá productos o servicios antes de enviar.'); return; }
   const btn = document.getElementById('bapr');
@@ -172,7 +172,7 @@ export async function sendAppr() {
 
 // ─── Generar PDF de vista previa (guarda como 'borrador') ───
 export async function genPDF() {
-  if (state.QUOTE_BUSY) return;
+  maybeReleaseStaleLock(); if (state.QUOTE_BUSY) return;
   const qSnap = snapshotQ();
   if (!qSnap.length) { showToast('Agregá productos o servicios antes de generar PDF.'); return; }
   const btn = document.getElementById('bpdf');

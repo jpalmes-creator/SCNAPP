@@ -21,6 +21,18 @@ if (!SB_URL || !SB_KEY) {
 // `supabase` viene del CDN cargado en index.html (<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2">)
 // Por eso lo accedemos desde window.supabase. En Fase 3 reemplazaremos esto por
 // import { createClient } from '@supabase/supabase-js' (cuando movamos a npm).
-const sb = window.supabase.createClient(SB_URL, SB_KEY);
+const sb = window.supabase.createClient(SB_URL, SB_KEY, {
+  auth: {
+    autoRefreshToken: true,
+    persistSession: true,
+    detectSessionInUrl: false,
+  },
+});
+
+// Auto-refresh agresivo: cada 5 min refrescamos el token aunque la app esté idle.
+// Esto evita que después de inactividad las llamadas a Supabase fallen silenciosamente.
+setInterval(() => {
+  sb.auth.refreshSession().catch(e => console.warn('[supabase] refresh failed:', e.message));
+}, 5 * 60 * 1000);
 
 export { sb, SB_URL, SB_KEY };
