@@ -14,7 +14,7 @@
 // ============================================================
 
 import { state } from './state.js';
-import { sb } from './supabase.js';
+import { sb, withTimeout } from './supabase.js';
 import { setSentryUser } from './sentry.js';
 
 // ─── Handlers que main.js conecta para reaccionar a cambios de sesión ───
@@ -69,13 +69,39 @@ export async function doLogin() {
   btn.disabled = true;
   btn.textContent = 'Ingresando...';
   document.getElementById('lerr').style.display = 'none';
-  const { error } = await sb.auth.signInWithPassword({ email: em, password: pw });
-  if (error) {
-    showErr('Correo o contraseña incorrectos');
+
+  // Failsafe: si la red se cuelga sí o sí desbloqueo el botón a los 15s
+  const unstick = setTimeout(() => {
+    if (btn.disabled) {
+      btn.disabled = false;
+      btn.textContent = 'Ingresar';
+      showErr('La conexión está lenta. Intentá de nuevo.');
+    }
+  }, 15000);
+
+  try {
+    const { error } = await withTimeout(
+      sb.auth.signInWithPassword({ email: em, password: pw }),
+      12000,
+      'login',
+    );
+    if (error) {
+      showErr('Correo o contraseña incorrectos');
+      btn.disabled = false;
+      btn.textContent = 'Ingresar';
+    }
+    // Si fue exitoso, onAuthStateChange dispara onLogin() automáticamente.
+  } catch (e) {
+    console.error('[auth] doLogin error:', e);
+    const msg = e.message?.includes('Timeout') || e.message?.includes('aborted') || e.message?.includes('Failed to fetch')
+      ? 'No se pudo conectar. Revisá tu internet y reintentá.'
+      : 'Error: ' + e.message;
+    showErr(msg);
     btn.disabled = false;
     btn.textContent = 'Ingresar';
+  } finally {
+    clearTimeout(unstick);
   }
-  // Si fue exitoso, onAuthStateChange dispara onLogin() automáticamente.
 }
 
 // ─── Logout ───
