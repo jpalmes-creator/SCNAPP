@@ -28,6 +28,18 @@ import {
   loadQNum, clearQ, saveQ, sendAppr, genPDF,
   registerApprovalHandler,
 } from './cotizador/quote.js';
+
+import {
+  loadProds, loadSmap, upPhoto,
+  openNewProd, openEditProd, saveProd,
+  rStk, fStk, rPre, fPre, svPr, rCrit,
+  registerProductHandlers,
+} from './productos.js';
+import {
+  loadClis, buildDL, aFill,
+  openNewCli, openEditCli, saveCli,
+  rCli, fCli,
+} from './clientes.js';
 import { showToast, openModal, closeModal } from './core/ui.js';
 import { $$, compImg, f2b64, cleanPathPart, uniqueJpgPath } from './core/utils.js';
 import { SCN_LOGO } from './core/logo.js';
@@ -40,6 +52,7 @@ initSentry();
 registerCatalogRender({ renderCat, renderSvcs });
 registerCloseHandler({ onClose: () => clearQ(true, { syncNum: true }) });
 registerApprovalHandler({ onApprovalSent: () => loadABadge() });
+registerProductHandlers({ renderCat });
 
 // `sb` se importa desde ./core/supabase.js
 // El estado global vive en ./core/state.js (importado como `state`).
@@ -68,32 +81,6 @@ async function showApp(){
   const sel=document.getElementById('dmes');if(sel)sel.value=new Date().getMonth();
 }
 
-async function loadProds(){
-  const{data}=await sb.from('productos').select('*').eq('es_servicio',false).eq('activo',true).order('marca');
-  state.PRODS=(data||[]).map(p=>({...p,precio_venta:p.precio_venta>0?p.precio_venta:Math.round((p.costo_unitario||0)*1.35)}));
-  const brands=[...new Set(state.PRODS.map(p=>p.marca).filter(Boolean))].sort();
-  const bSel=document.getElementById('bch-sel');
-  const curBrand=bSel?.value||'';
-  if(bSel)bSel.innerHTML='<option value="">Todas las marcas</option>'+brands.map(b=>`<option value="${b}"${b===curBrand?' selected':''}>${b}</option>`).join('');
-  const tipos=[...new Set(state.PRODS.map(p=>p.tipo_uso).filter(Boolean))].sort();
-  document.getElementById('tch').innerHTML='<button class="chip on" onclick="st2(\'\',this)">Todos</button>'+
-    tipos.map(t=>{const tc=TCLASS(t);return `<button class="chip" onclick="st2('${t}',this)">${t}</button>`;}).join('');
-}
-async function loadSmap(){
-  const{data}=await sb.from('stock').select('*');
-  state.SMAP={};
-  (data||[]).forEach(r=>{
-    if(!state.SMAP[r.producto_id])state.SMAP[r.producto_id]={q:0,a:0,l:0,t:0};
-    const s=state.SMAP[r.producto_id];
-    if(r.bodega==='SCN QUILICURA')s.q=r.cantidad;
-    if(r.bodega==='BODEGA AUTO')s.a=r.cantidad;
-    if(r.bodega==='LOS ANDES')s.l=r.cantidad;
-    s.t=s.q+s.a+s.l;
-  });
-}
-async function loadClis(){const{data}=await sb.from('clientes').select('*').order('nombre');state.CLIS=data||[];}
-function buildDL(){document.getElementById('cll').innerHTML=state.CLIS.map(c=>`<option value="${c.nombre}" data-rut="${c.rut}" data-em="${c.email||''}">`).join('');}
-function aFill(){const v=document.getElementById('qcl').value;const c=state.CLIS.find(x=>x.nombre===v);if(c){document.getElementById('qrt').value=c.rut||'';document.getElementById('qem').value=c.email||'';}}
 async function loadABadge(){const{count}=await sb.from('cotizaciones').select('id',{count:'exact',head:true}).eq('estado','pendiente');const b=document.getElementById('nb-a');b.textContent=count||0;b.style.display=count?'inline-block':'none';}
 
 const PTITLES={cot:'Cotizador',mis:'Mis Cotizaciones',cli:'Clientes',stk:'Stock Disponible',apr:'Aprobaciones',dash:'Dashboard',pre:'Precios',all:'Todas las Cotizaciones',crit:'Stock Crítico',imp:'Importar Stock',fic:'Fichas Técnicas'};
@@ -124,39 +111,6 @@ function go(pg,btn){
 
 // cleanPathPart, uniqueJpgPath se importan desde ./core/utils.js
 
-async function upPhoto(event,pid){
-  const input=event.target;
-  const file=input.files&&input.files[0];if(!file)return;
-  input.disabled=true;
-  showToast('Subiendo foto...');
-  try{
-    const comp=await compImg(file,800);
-    const fn=uniqueJpgPath('productos','prod_'+pid);
-    const{error:upErr}=await sb.storage.from('fotos-neumaticos').upload(fn,comp,{contentType:'image/jpeg',cacheControl:'3600',upsert:false});
-    if(upErr){showToast('Error al subir: '+upErr.message);console.error('Storage error:',upErr);return;}
-    const{data:ud}=sb.storage.from('fotos-neumaticos').getPublicUrl(fn);
-    const url=ud.publicUrl;
-    const{error:dbErr}=await sb.from('productos').update({foto_url:url}).eq('id',pid);
-    if(dbErr){showToast('Error guardando URL: '+dbErr.message);console.error('DB foto_url error:',dbErr);return;}
-    const p=state.PRODS.find(x=>x.id===pid);if(p)p.foto_url=url;
-    // Sincronizar foto a TODOS los productos y fichas del mismo (marca, modelo) — la foto es por modelo, no por SKU
-    if(p&&p.marca&&p.modelo){
-      const M=p.marca.toUpperCase().trim(), MO=p.modelo.toUpperCase().trim();
-      try{
-        await sb.from('productos').update({foto_url:url}).ilike('marca',M).ilike('modelo',MO);
-        await sb.from('fichas_tecnicas').update({imagen_url:url}).ilike('marca',M).ilike('modelo',MO);
-      }catch(e){console.warn('Sync foto a productos/fichas falló (no crítico):',e);}
-      // Actualizar caches locales
-      state.PRODS.forEach(x=>{if(x.marca&&x.modelo&&x.marca.toUpperCase().trim()===M&&x.modelo.toUpperCase().trim()===MO)x.foto_url=url;});
-      if(typeof state.FICHAS!=='undefined'&&Array.isArray(state.FICHAS)){
-        state.FICHAS.forEach(f=>{if(f.marca&&f.modelo&&f.marca.toUpperCase().trim()===M&&f.modelo.toUpperCase().trim()===MO)f.imagen_url=url;});
-      }
-    }
-    renderCat();
-    showToast('✓ Foto guardada y sincronizada con la ficha técnica');
-  }catch(e){showToast('Error: '+e.message);console.error(e);}
-  finally{input.value='';input.disabled=false;}
-}
 
 // compImg, f2b64 se importan desde ./core/utils.js
 
@@ -211,30 +165,7 @@ async function loadMis(){
   const b=document.getElementById('nb-m');b.textContent=data.length;b.style.display='inline-block';
 }
 
-function rCli(data){document.getElementById('clitb').innerHTML=data.slice(0,100).map(c=>`<tr>
-  <td class="mn" style="font-size:11px">${c.rut}</td><td style="font-weight:600">${c.nombre}</td>
-  <td><span class="bdg b${c.segmento==='VIP'?'vip':c.segmento==='MEDIANO'?'med':'peq'}">${c.segmento||'—'}</span></td>
-  <td class="mn">${$$(c.total_ventas_2025)}</td>
-  <td style="color:var(--g500);font-size:11px">${c.email||'—'}</td>
-  <td style="font-size:11px">${c.telefono||'—'}</td>
-  <td><button onclick="openEditCli('${c.id}')" style="background:none;border:none;cursor:pointer;font-size:14px;color:var(--g400);" onmouseover="this.style.color='var(--blue)'" onmouseout="this.style.color='var(--g400)'">✏️</button></td>
-</tr>`).join('');}
-function fCli(q){rCli(state.CLIS.filter(c=>!q||c.nombre.toLowerCase().includes(q.toLowerCase())||c.rut.includes(q)));}
 
-function rStk(data){document.getElementById('stktb').innerHTML=data.slice(0,150).map(p=>{
-  const s=state.SMAP[p.id]||{q:0,a:0,l:0,t:0};
-  const sc=s.t>5?'sok':s.t>0?'slow':'szero';
-  return`<tr>
-    <td style="font-size:11px;max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.descripcion}</td>
-    <td style="font-weight:600;color:var(--red);font-size:11px">${p.marca}</td>
-    <td class="mn" style="font-size:11px">${p.medida}</td>
-    <td style="text-align:center"><span class="p-stk ${s.q>0?'sok':'szero'}">${s.q}</span></td>
-    <td style="text-align:center"><span class="p-stk ${s.a>0?'sok':'szero'}">${s.a}</span></td>
-    <td style="text-align:center"><span class="p-stk ${s.l>0?'sok':'szero'}">${s.l}</span></td>
-    <td style="text-align:center"><span class="p-stk ${sc}"><strong>${s.t}</strong></span></td>
-    <td><button onclick="openEditProd('${p.id}')" style="background:none;border:none;cursor:pointer;font-size:14px;color:var(--g400);" onmouseover="this.style.color='var(--blue)'" onmouseout="this.style.color='var(--g400)'">✏️</button></td>
-  </tr>`;}).join('');}
-function fStk(q){rStk(state.PRODS.filter(p=>!q||p.descripcion?.toLowerCase().includes(q.toLowerCase())||p.marca?.toLowerCase().includes(q.toLowerCase())));}
 
 async function loadApr(){
   const{data}=await sb.from('cotizaciones').select('*,cotizacion_items(*)').eq('estado','pendiente').order('created_at');
@@ -339,13 +270,6 @@ async function loadDash(){
     </div>`).join(''):'<div style="text-align:center;padding:16px;color:var(--g500);font-size:12px;">Sin ventas este mes</div>';
 }
 
-function rPre(data){document.getElementById('pretb').innerHTML=data.slice(0,80).map(p=>`
-  <div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--g100);">
-    <div style="flex:1;min-width:0;"><div style="font-size:12px;font-weight:600;">${p.marca||''} ${p.medida||''} ${p.modelo||''}</div><div style="font-size:10px;color:var(--g500)">Costo: ${$$(p.costo_unitario)}</div></div>
-    <input type="number" value="${p.precio_venta}" style="width:110px;padding:6px 9px;border:1.5px solid var(--g200);border-radius:6px;font-family:var(--mono);font-size:12px;text-align:right;outline:none;" onfocus="this.style.borderColor='var(--red)'" onblur="this.style.borderColor='var(--g200)'" onchange="svPr('${p.id}',this.value)">
-  </div>`).join('');}
-function fPre(q){rPre(state.PRODS.filter(p=>!q||p.descripcion?.toLowerCase().includes(q.toLowerCase())||p.marca?.toLowerCase().includes(q.toLowerCase())));}
-async function svPr(id,v){const pr=parseFloat(v)||0;await sb.from('productos').update({precio_venta:pr}).eq('id',id);const p=state.PRODS.find(x=>x.id===id);if(p)p.precio_venta=pr;showToast('✓ Precio guardado');}
 
 async function loadAll(){
   const tb = document.getElementById('alltb');
@@ -401,158 +325,13 @@ async function previewCot(id){
 // openModal, closeModal se importan desde ./core/ui.js
 
 // ── NEW / EDIT CLIENTE ────────────────────────────────────
-function openNewCli(){
-  document.getElementById('modal-cli-title').textContent='Nuevo cliente';
-  document.getElementById('cli-edit-id').value='';
-  ['cli-nm','cli-rut','cli-em','cli-tel','cli-cnt','cli-dir','cli-notas'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
-  document.getElementById('cli-seg').value='PEQUEÑO';
-  document.getElementById('cli-dc').value='30';
-  openModal('modal-cli');
-}
 
-async function openEditCli(id){
-  const c=state.CLIS.find(x=>x.id===id);
-  if(!c)return;
-  document.getElementById('modal-cli-title').textContent='Editar cliente';
-  document.getElementById('cli-edit-id').value=c.id;
-  document.getElementById('cli-nm').value=c.nombre||'';
-  document.getElementById('cli-rut').value=c.rut||'';
-  document.getElementById('cli-em').value=c.email||'';
-  document.getElementById('cli-tel').value=c.telefono||'';
-  document.getElementById('cli-cnt').value=c.contacto||'';
-  document.getElementById('cli-dir').value=c.direccion||'';
-  document.getElementById('cli-seg').value=c.segmento||'PEQUEÑO';
-  document.getElementById('cli-dc').value=c.dias_credito||30;
-  document.getElementById('cli-notas').value=c.notas||'';
-  openModal('modal-cli');
-}
 
-async function saveCli(){
-  const editId=document.getElementById('cli-edit-id').value;
-  const nm=document.getElementById('cli-nm').value.trim();
-  const rut=document.getElementById('cli-rut').value.trim();
-  if(!nm||!rut){showToast('Nombre y RUT son obligatorios');return;}
-  const payload={
-    nombre:nm, rut:rut,
-    email:document.getElementById('cli-em').value.trim()||null,
-    telefono:document.getElementById('cli-tel').value.trim()||null,
-    contacto:document.getElementById('cli-cnt').value.trim()||null,
-    direccion:document.getElementById('cli-dir').value.trim()||null,
-    segmento:document.getElementById('cli-seg').value,
-    dias_credito:parseInt(document.getElementById('cli-dc').value)||30,
-    notas:document.getElementById('cli-notas').value.trim()||null,
-  };
-  let error;
-  if(editId){
-    ({error}=await sb.from('clientes').update(payload).eq('id',editId));
-  } else {
-    ({error}=await sb.from('clientes').insert({...payload, total_ventas_2025:0}));
-  }
-  if(error){showToast('Error: '+error.message);return;}
-  showToast(editId?'✓ Cliente actualizado':'✓ Cliente creado');
-  closeModal('modal-cli');
-  await loadClis();
-  buildDL();
-  rCli(state.CLIS);
-}
 
 // ── NEW / EDIT PRODUCTO ───────────────────────────────────
-function openNewProd(){
-  document.getElementById('modal-prod-title').textContent='Nuevo producto';
-  document.getElementById('prod-edit-id').value='';
-  document.getElementById('prod-id').disabled=false;
-  ['prod-desc','prod-marca','prod-medida','prod-id','prod-modelo','prod-telas','prod-prof','prod-ic','prod-iv','prod-peso'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
-  document.getElementById('prod-costo').value='';
-  document.getElementById('prod-precio').value='';
-  document.getElementById('prod-stk-q').value='0';
-  document.getElementById('prod-stk-a').value='0';
-  document.getElementById('prod-stk-l').value='0';
-  document.getElementById('prod-tipo').value='DIRECCIONAL';
-  document.getElementById('prod-veh').value='CAMION';
-  openModal('modal-prod');
-}
 
-async function openEditProd(id){
-  const p=state.PRODS.find(x=>x.id===id);
-  if(!p)return;
-  document.getElementById('modal-prod-title').textContent='Editar producto';
-  document.getElementById('prod-edit-id').value=p.id;
-  document.getElementById('prod-desc').value=p.descripcion||'';
-  document.getElementById('prod-marca').value=p.marca||'';
-  document.getElementById('prod-medida').value=p.medida||'';
-  document.getElementById('prod-id').value=p.id;
-  document.getElementById('prod-id').disabled=true;
-  document.getElementById('prod-costo').value=p.costo_unitario||'';
-  document.getElementById('prod-precio').value=p.precio_venta||'';
-  document.getElementById('prod-tipo').value=p.tipo_uso||'DIRECCIONAL';
-  document.getElementById('prod-veh').value=p.tipo_vehiculo||'CAMION';
-  const s=state.SMAP[p.id]||{q:0,a:0,l:0};
-  document.getElementById('prod-stk-q').value=s.q;
-  document.getElementById('prod-stk-a').value=s.a;
-  document.getElementById('prod-stk-l').value=s.l;
-  document.getElementById('prod-modelo').value=p.modelo||'';
-  document.getElementById('prod-telas').value=p.telas||'';
-  document.getElementById('prod-prof').value=p.profundidad||'';
-  document.getElementById('prod-ic').value=p.indice_carga||'';
-  document.getElementById('prod-iv').value=p.indice_velocidad||'';
-  document.getElementById('prod-peso').value=p.peso_kg||'';
-  openModal('modal-prod');
-}
 
-async function saveProd(){
-  const editId=document.getElementById('prod-edit-id').value;
-  const desc=document.getElementById('prod-desc').value.trim();
-  const marca=document.getElementById('prod-marca').value.trim().toUpperCase();
-  const prodId=(editId||document.getElementById('prod-id').value.trim()||Date.now().toString());
-  if(!desc||!marca){showToast('Descripción y marca son obligatorios');return;}
-  const costo=parseFloat(document.getElementById('prod-costo').value)||0;
-  const precio=parseFloat(document.getElementById('prod-precio').value)||Math.round(costo*1.35);
-  const payload={
-    id:prodId, descripcion:desc, marca, 
-    medida:document.getElementById('prod-medida').value.trim()||null,
-    tipo_uso:document.getElementById('prod-tipo').value,
-    tipo_vehiculo:document.getElementById('prod-veh').value,
-    costo_unitario:costo, precio_venta:precio,
-    es_servicio:false, activo:true,
-    modelo:document.getElementById('prod-modelo').value.trim().toUpperCase()||null,
-    telas:document.getElementById('prod-telas').value.trim()||null,
-    profundidad:document.getElementById('prod-prof').value.trim()||null,
-    indice_carga:document.getElementById('prod-ic').value.trim()||null,
-    indice_velocidad:document.getElementById('prod-iv').value.trim()||null,
-    peso_kg:document.getElementById('prod-peso').value.trim()||null,
-  };
-  let error;
-  if(editId){
-    ({error}=await sb.from('productos').update(payload).eq('id',editId));
-  } else {
-    ({error}=await sb.from('productos').insert(payload));
-  }
-  if(error){showToast('Error: '+error.message);return;}
-  // Save stock
-  const bodegas=[
-    {bodega:'SCN QUILICURA', cantidad:parseInt(document.getElementById('prod-stk-q').value)||0},
-    {bodega:'BODEGA AUTO',   cantidad:parseInt(document.getElementById('prod-stk-a').value)||0},
-    {bodega:'LOS ANDES',     cantidad:parseInt(document.getElementById('prod-stk-l').value)||0},
-  ];
-  let stkError=null;
-  for(const b of bodegas){
-    const{error:se}=await sb.from('stock').upsert({producto_id:prodId, bodega:b.bodega, cantidad:b.cantidad},{onConflict:'producto_id,bodega'});
-    if(se){stkError=se;console.error('Stock upsert error:',b.bodega,se);}
-  }
-  showToast(stkError?'⚠️ Producto guardado pero error en stock: '+stkError.message:editId?'✓ Producto actualizado':'✓ Producto creado');
-  closeModal('modal-prod');
-  document.getElementById('prod-id').disabled=false;
-  await Promise.all([loadProds(),loadSmap()]);
-  renderCat();
-  rStk(state.PRODS);
-}
 
-function rCrit(){
-  const cr=state.PRODS.filter(p=>(state.SMAP[p.id]||{t:0}).t===0);
-  const el=document.getElementById('critl');
-  if(!cr.length){el.innerHTML='<div class="empty"><div class="ei">✅</div>No hay productos sin stock</div>';return;}
-  el.innerHTML=cr.map(p=>`<div style="background:var(--red-l);border:1px solid #FCA5A5;border-radius:8px;padding:10px 14px;margin-bottom:8px;display:flex;align-items:center;gap:10px;"><span style="font-size:18px;">⚠️</span><div><div style="font-size:12px;font-weight:700;color:#9B0D22">${p.marca||''} — ${p.descripcion}</div><div style="font-size:11px;color:var(--red)">Medida: ${p.medida||'—'} · Sin stock en las 3 bodegas</div></div></div>`).join('');
-}
 
 // $$ (formatCLP) se importa desde ./core/utils.js
 function fmt(n){return n>=1000000?'$'+(n/1000000).toFixed(1)+'M':$$(n);}
