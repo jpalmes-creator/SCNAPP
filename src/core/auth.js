@@ -145,25 +145,29 @@ async function onLogin(user) {
   window.sb = sb;
   console.log('[auth] Login user:', { id: user.id, email: user.email });
 
-  // Buscar rol en tabla `usuarios` (con retry por si la fila aún no se replicó)
+  // Buscar rol en tabla `usuarios` con timeout corto. Si se cuelga o falla,
+  // caemos al fallback por email — el usuario entra igual y la app no queda
+  // pegada en "Ingresando..." durante 36 segundos.
   state.ROLE = null;
-  let lastError = null;
-  for (let i = 0; i < 3; i++) {
-    const { data, error } = await sb.from('usuarios').select('*').eq('id', user.id).maybeSingle();
-    console.log(`[auth] Intento ${i + 1} usuarios query:`, { data, error });
-    if (error) lastError = error;
+  try {
+    const { data, error } = await withTimeout(
+      sb.from('usuarios').select('*').eq('id', user.id).maybeSingle(),
+      5000,
+      'query usuarios',
+    );
+    console.log('[auth] usuarios query:', { data, error });
+    if (error) console.error('[auth] Error consultando usuarios:', error);
     if (data) {
       state.ROLE = data.rol || 'vendedor';
       state.UNAME = data.nombre || user.email.split('@')[0];
-      break;
     }
-    await new Promise(r => setTimeout(r, 500));
+  } catch (e) {
+    console.warn('[auth] usuarios query falló/timeout — voy al fallback:', e.message);
   }
-  if (lastError) console.error('[auth] Error consultando usuarios:', lastError);
 
-  // Fallback si no hay registro en `usuarios`: deducir por email
+  // Fallback si no hay registro en `usuarios` o si la query se colgó: deducir por email
   if (!state.ROLE) {
-    console.warn('[auth] No se encontró rol en usuarios — usando fallback por email');
+    console.warn('[auth] Usando fallback por email');
     const em = user.email.toLowerCase();
     if (em === 'pablo@scnchile.com') { state.ROLE = 'gerente'; state.UNAME = 'Pablo'; }
     else if (em === 'juan.palmess@gmail.com' || em === 'jpalmes@scnchile.com') { state.ROLE = 'admin'; state.UNAME = 'JP'; }
@@ -171,7 +175,14 @@ async function onLogin(user) {
   }
   console.log('[auth] Final state.ROLE:', state.ROLE);
 
-  await _onLoggedIn();
+  // Lanzamos showApp con try/catch así si peta cargando productos/clientes
+  // el botón al menos se libera y el usuario ve qué pasó
+  try {
+    await _onLoggedIn();
+  } catch (e) {
+    console.error('[auth] _onLoggedIn falló:', e);
+    showErr('Sesión iniciada pero hubo un error cargando datos: ' + e.message);
+  }
 }
 
 // ─── Inicialización al arrancar la app ───
