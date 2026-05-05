@@ -10,6 +10,24 @@ import { initSentry, setSentryUser, captureError } from './core/sentry.js';
 import { sb } from './core/supabase.js';
 import { state, clearPreview, setPreview } from './core/state.js';
 import { initAuth, doLogin, doLogout, setAuthHandlers } from './core/auth.js';
+import {
+  addI, rmI, chQty, setQty, upP,
+  rQ, rcTot, syncQuoteButtons, setQuoteBusy,
+  snapshotQ, calcQuoteTotals, updateMobCart,
+  registerCatalogRender,
+} from './cotizador/cart.js';
+import {
+  TCLASS, getFilt, renderCat, renderSvcs,
+  fp, setFS, sb2sel, sb2, sb2mob, st2, setTab,
+} from './cotizador/catalog.js';
+import {
+  openPDF, closePDFModal, downloadPDF, sendEmailFromPreview,
+  registerCloseHandler,
+} from './cotizador/pdf-modal.js';
+import {
+  loadQNum, clearQ, saveQ, sendAppr, genPDF,
+  registerApprovalHandler,
+} from './cotizador/quote.js';
 import { showToast, openModal, closeModal } from './core/ui.js';
 import { $$, compImg, f2b64, cleanPathPart, uniqueJpgPath } from './core/utils.js';
 import { SCN_LOGO } from './core/logo.js';
@@ -18,25 +36,16 @@ import { buildPDF, buildFichaPage } from './core/pdf.js';
 // Inicializar tracking de errores ANTES de todo
 initSentry();
 
-// Email config
-
-const EMAIL_FROM = 'SCN Neumáticos <onboarding@resend.dev>';
-const EMAIL_REPLY_TO = ['recepcion@scnchile.com','pablo@scnchile.com','juan.palmess@gmail.com'];
+// Conectar callbacks entre módulos del cotizador para evitar dependencias circulares
+registerCatalogRender({ renderCat, renderSvcs });
+registerCloseHandler({ onClose: () => clearQ(true, { syncNum: true }) });
+registerApprovalHandler({ onApprovalSent: () => loadABadge() });
 
 // `sb` se importa desde ./core/supabase.js
 // El estado global vive en ./core/state.js (importado como `state`).
 // Antes state.ME, state.Q, state.QNUM, state.PRODS, etc. eran globals; ahora son state.ME, state.Q, etc.
 
-const SVCS=[
-  {id:'s1',nm:'Montaje camión en taller',    pr:22000,ic:'🔧'},
-  {id:'s2',nm:'Montaje a terreno (RM)',       pr:35000,ic:'🚛'},
-  {id:'s3',nm:'Balanceo computarizado',       pr:8000, ic:'⚖️'},
-  {id:'s4',nm:'Reparación pinchadura taller', pr:25000,ic:'🩹'},
-  {id:'s5',nm:'Reparación emergencia',        pr:45000,ic:'⚡'},
-  {id:'s6',nm:'Revisión e inflado de flota',  pr:4500, ic:'🔍'},
-  {id:'s7',nm:'Alineación 3 ejes',            pr:95000,ic:'📐'},
-  {id:'s8',nm:'Rotación neumáticos',          pr:18000,ic:'🔄'},
-];
+// SVCS se importa desde ./cotizador/services.js
 
 
 
@@ -85,13 +94,6 @@ async function loadSmap(){
 async function loadClis(){const{data}=await sb.from('clientes').select('*').order('nombre');state.CLIS=data||[];}
 function buildDL(){document.getElementById('cll').innerHTML=state.CLIS.map(c=>`<option value="${c.nombre}" data-rut="${c.rut}" data-em="${c.email||''}">`).join('');}
 function aFill(){const v=document.getElementById('qcl').value;const c=state.CLIS.find(x=>x.nombre===v);if(c){document.getElementById('qrt').value=c.rut||'';document.getElementById('qem').value=c.email||'';}}
-async function loadQNum(){
-  const{data,error}=await sb.from('cotizaciones').select('numero').order('numero',{ascending:false}).limit(1);
-  if(error){console.error('loadQNum error:',error);document.getElementById('qnum').textContent='#'+state.QNUM;return state.QNUM;}
-  state.QNUM=data&&data.length?Number(data[0].numero)+1:74815;
-  document.getElementById('qnum').textContent='#'+state.QNUM;
-  return state.QNUM;
-}
 async function loadABadge(){const{count}=await sb.from('cotizaciones').select('id',{count:'exact',head:true}).eq('estado','pendiente');const b=document.getElementById('nb-a');b.textContent=count||0;b.style.display=count?'inline-block':'none';}
 
 const PTITLES={cot:'Cotizador',mis:'Mis Cotizaciones',cli:'Clientes',stk:'Stock Disponible',apr:'Aprobaciones',dash:'Dashboard',pre:'Precios',all:'Todas las Cotizaciones',crit:'Stock Crítico',imp:'Importar Stock',fic:'Fichas Técnicas'};
@@ -116,70 +118,9 @@ function go(pg,btn){
   if(pg==='fic')loadFichas();
 }
 
-function getFilt(){
-  const q=(document.getElementById('psr')?.value||'').toLowerCase();
-  return state.PRODS.filter(p=>{
-    if(state.FS){const s=state.SMAP[p.id]||{t:0};if(state.FS==='si'&&s.t<=0)return false;if(state.FS==='no'&&s.t>0)return false;}
-    if(state.FB&&p.marca!==state.FB)return false;
-    if(state.FT&&p.tipo_uso!==state.FT)return false;
-    if(q&&!p.descripcion?.toLowerCase().includes(q)&&!p.marca?.toLowerCase().includes(q)&&!p.medida?.toLowerCase().includes(q)&&!p.modelo?.toLowerCase().includes(q))return false;
-    return true;
-  });
-}
 
-let _rcTimer=null;
-function renderCat(){clearTimeout(_rcTimer);_rcTimer=setTimeout(_renderCat,60);}
-function _renderCat(){
-  const items=getFilt(),inQ=new Set(state.Q.map(i=>i.id)),grid=document.getElementById('pgrd');
-  document.getElementById('pct').textContent=items.length+' neumáticos';
-  if(!items.length){grid.innerHTML='<div class="empty"><div class="ei">🔍</div>Sin resultados</div>';return;}
-  grid.innerHTML=items.slice(0,60).map(p=>{
-    const s=state.SMAP[p.id]||{t:0};
-    const sc=s.t>5?'sok':s.t>0?'slow':'szero';
-    const sl=s.t>0?s.t+' ud.':'Sin stock';
-    const tc=TCLASS(p.tipo_uso);
-    const img=p.foto_url?`<img src="${p.foto_url}" alt="" onerror="this.style.display='none'">`:`<span class="p-ni">🛞</span>`;
-    return `<div class="pcard ${inQ.has(p.id)?'pk':''}" onclick="addI('${p.id}','n')">
-      <div class="p-img">${img}
-        <button class="p-photo-btn" onclick="event.stopPropagation()">📷 Foto<input type="file" accept="image/*" onchange="upPhoto(event,'${p.id}')"></button>
-      </div>
-      <div class="p-inf">
-        <div class="p-brand">${p.marca||'—'}</div>
-        <div class="p-name">${p.medida||''} ${p.modelo||''}</div>
-        <div class="p-bot"><span class="p-tipo t${tc}">${p.tipo_uso||''}</span><span class="p-stk ${sc}">${sl}</span></div>
-        <div class="p-price">${$$(p.precio_venta)}</div>
-      </div>
-      <button class="p-add">${inQ.has(p.id)?'✓':'+'}</button>
-    </div>`;
-  }).join('');
-  if(items.length>60)grid.innerHTML+=`<div style="grid-column:1/-1;text-align:center;padding:12px;color:var(--g500);font-size:11px;">Mostrando 60 de ${items.length} — usa el buscador para filtrar</div>`;
-}
 
-function renderSvcs(){
-  const inQ=new Set(state.Q.map(i=>i.id));
-  document.getElementById('svl').innerHTML=SVCS.map(s=>`
-    <div class="sv-row ${inQ.has(s.id)?'pk':''}" onclick="addI('${s.id}','s')">
-      <span class="sv-ic">${s.ic}</span>
-      <span class="sv-nm">${s.nm}</span>
-      <span class="sv-pr">${$$(s.pr)}</span>
-      <button class="sv-add">${inQ.has(s.id)?'✓':'+'}</button>
-    </div>`).join('');
-}
 
-function TCLASS(t){return{DIRECCIONAL:'D',TRACCION:'T',MIXTO:'M',FAENERO:'F','CITY/TOURING':'CT',SPORT:'SP',SUV:'SV','ALL TERRAIN':'AT','MUD TERRAIN':'MT',COMERCIAL:'CO',LLANTA:'LL',CAMARA:'CA'}[t]||'OT';}
-function fp(){renderCat();}
-function setFS(v,btn){state.FS=v;document.querySelectorAll('#stk-tog button').forEach(b=>b.classList.remove('on'));btn.classList.add('on');renderCat();}
-function sb2sel(v){state.FB=v;renderCat();}
-function sb2(v,btn){state.FB=v;renderCat();}
-function sb2mob(v){state.FB=v;renderCat();}
-function st2(v,btn){state.FT=v;document.querySelectorAll('#tch .chip').forEach(b=>b.classList.remove('on'));btn.classList.add('on');renderCat();}
-function setTab(t,btn){
-  document.getElementById('pn').style.display=t==='n'?'block':'none';
-  document.getElementById('ps').style.display=t==='s'?'block':'none';
-  document.getElementById('tn').className='t-btn'+(t==='n'?' on':'');
-  document.getElementById('ts').className='t-btn'+(t==='s'?' on':'');
-  if(t==='s')renderSvcs();
-}
 
 // cleanPathPart, uniqueJpgPath se importan desde ./core/utils.js
 
@@ -219,223 +160,16 @@ async function upPhoto(event,pid){
 
 // compImg, f2b64 se importan desde ./core/utils.js
 
-function addI(id,tipo){
-  const prod=tipo==='n'?state.PRODS.find(p=>p.id===id):SVCS.find(s=>s.id===id);
-  if(!prod)return;
-  const ex=state.Q.find(i=>i.id===id);
-  if(ex){ex.qty++;showToast('+1 agregado');}
-  else{state.Q.push({id,prod,qty:1,tipo,up:tipo==='n'?prod.precio_venta:prod.pr});showToast('Agregado');}
-  rQ();renderCat();if(document.getElementById('ps').style.display!=='none')renderSvcs();
-}
 
-function chQty(id,d){const i=state.Q.find(x=>x.id===id);if(!i)return;i.qty+=d;if(i.qty<=0)state.Q=state.Q.filter(x=>x.id!==id);rQ();renderCat();}
-function setQty(id,v){const i=state.Q.find(x=>x.id===id);if(!i)return;const qty=Math.max(1,parseInt(v)||1);if(qty===i.qty)return;i.qty=qty;rQ();renderCat();}
-function rmI(id){state.Q=state.Q.filter(i=>i.id!==id);rQ();renderCat();}
-function upP(id,v){const i=state.Q.find(x=>x.id===id);if(!i)return;i.up=parseFloat(v)||0;const el=document.getElementById('qs-'+id);if(el)el.textContent=$$(i.up*i.qty);rcTot();}
-function rcTot(){const n=state.Q.reduce((a,i)=>a+i.up*i.qty,0),iv=Math.round(n*.19);document.getElementById('tn2').textContent=$$(n);document.getElementById('ti').textContent=$$(iv);document.getElementById('tt').textContent=$$(n+iv);}
 
-function syncQuoteButtons(){
-  const hasItems=state.Q.length>0;
-  const bp=document.getElementById('bpdf'),ba=document.getElementById('bapr'),bf=document.getElementById('bfic');
-  if(bp)bp.disabled=state.QUOTE_BUSY||!hasItems;
-  if(ba)ba.disabled=state.QUOTE_BUSY||!hasItems;
-  if(bf)bf.disabled=state.QUOTE_BUSY||!hasItems;
-}
-function setQuoteBusy(busy){state.QUOTE_BUSY=!!busy;syncQuoteButtons();}
-function snapshotQ(){
-  return state.Q.map(i=>({id:i.id,tipo:i.tipo,qty:Math.max(1,parseInt(i.qty)||1),up:Number(i.up)||0,prod:{...i.prod}}));
-}
-function calcQuoteTotals(items){
-  const neto=(items||[]).reduce((a,i)=>a+(Number(i.up)||0)*(Number(i.qty)||0),0);
-  const iva=Math.round(neto*.19);
-  return {neto,iva,total:neto+iva};
-}
 
-function rQ(){
-  const list=document.getElementById('qilist'),empty=document.getElementById('qpempty'),tots=document.getElementById('qtots');
-  if(!state.Q.length){empty.style.display='flex';list.innerHTML='';tots.style.display='none';syncQuoteButtons();updateMobCart();return;}
-  empty.style.display='none';tots.style.display='block';syncQuoteButtons();
-  const neu=state.Q.filter(i=>i.tipo==='n'),svc=state.Q.filter(i=>i.tipo==='s');
-  let h='';
-  if(neu.length){
-    const cnt=neu.reduce((a,i)=>a+i.qty,0);
-    h+=`<div class="qsec">Neumáticos <span class="qsec-b">${cnt}</span></div>`;
-    h+=neu.map(item=>{
-      const ph=item.prod.foto_url;
-      return `<div class="qi">
-        <div class="qi-img">${ph?`<img src="${ph}">`:'🛞'}</div>
-        <div style="min-width:0;">
-          <div class="qi-br">${item.prod.marca||'—'}</div>
-          <div class="qi-nm">${item.prod.medida||''} ${item.prod.modelo||''}</div>
-          <input class="qi-pi" type="number" value="${item.up}" onchange="upP('${item.id}',this.value)" onfocus="this.style.borderColor='var(--red)'" onblur="this.style.borderColor='var(--g200)'">
-          <div class="qi-ctrl">
-            <button class="qcb" onclick="chQty('${item.id}',-1)">−</button>
-            <input type="number" class="qcn" value="${item.qty}" min="1" onchange="setQty('${item.id}',this.value)" onclick="this.select()">
-            <button class="qcb" onclick="chQty('${item.id}',1)">+</button>
-          </div>
-        </div>
-        <div class="qi-r">
-          <div class="qi-sub" id="qs-${item.id}">${$$(item.up*item.qty)}</div>
-          <button class="qi-rm" onclick="rmI('${item.id}')">✕</button>
-        </div>
-      </div>`;
-    }).join('');
-  }
-  if(svc.length){
-    const cnt=svc.reduce((a,i)=>a+i.qty,0);
-    h+=`<div class="qsec" style="margin-top:8px">Servicios <span class="qsec-b">${cnt}</span></div>`;
-    h+=svc.map(item=>`<div class="qi">
-      <div class="qi-img">${item.prod.ic}</div>
-      <div style="min-width:0;">
-        <div class="qi-br" style="color:var(--g500)">SERVICIO</div>
-        <div class="qi-nm">${item.prod.nm}</div>
-        <input class="qi-pi" type="number" value="${item.up}" onchange="upP('${item.id}',this.value)" onfocus="this.style.borderColor='var(--red)'" onblur="this.style.borderColor='var(--g200)'">
-        <div class="qi-ctrl">
-          <button class="qcb" onclick="chQty('${item.id}',-1)">−</button>
-          <span class="qcn">${item.qty}</span>
-          <button class="qcb" onclick="chQty('${item.id}',1)">+</button>
-        </div>
-      </div>
-      <div class="qi-r">
-        <div class="qi-sub" id="qs-${item.id}">${$$(item.up*item.qty)}</div>
-        <button class="qi-rm" onclick="rmI('${item.id}')">✕</button>
-      </div>
-    </div>`).join('');
-  }
-  list.innerHTML=h;rcTot();
-  updateMobCart();
-}
 
-async function clearQ(force=false,opts={syncNum:true}){
-  const fields=['qcl','qrt','qat','qem'];
-  const hasForm=fields.some(id=>(document.getElementById(id)?.value||'').trim());
-  if(!force&&(state.Q.length||hasForm)&&!confirm('¿Limpiar la cotización?'))return false;
-  state.Q=[];
-  fields.forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
-  const pg=document.getElementById('qpg');if(pg)pg.value='Contado';
-  state.PREVIEW_PDF_HTML='';state.PREVIEW_EMAIL='';state.PREVIEW_NUM='';state.PREVIEW_SHOULD_CLEAR_Q=false;
-  document.querySelector('.qp')?.classList.remove('mob-open');
-  rQ();renderCat();
-  if(document.getElementById('ps')?.style.display!=='none')renderSvcs();
-  if(opts.syncNum!==false){try{await loadQNum();}catch(e){console.error('No se pudo sincronizar state.QNUM:',e);}}
-  return true;
-}
 
-async function saveQ(estado,qItems=null){
-  if(!state.ME||!state.ME.id){showToast('❌ Sesión inválida. Cerrá y volvé a iniciar sesión.');return null;}
-  const items=(qItems&&qItems.length?qItems:snapshotQ()).map(i=>({id:i.id,tipo:i.tipo,qty:Math.max(1,parseInt(i.qty)||1),up:Number(i.up)||0,prod:{...i.prod}}));
-  if(!items.length){showToast('Agregá al menos un ítem antes de guardar.');return null;}
 
-  const cl=document.getElementById('qcl').value||'—';
-  const rt=document.getElementById('qrt').value||'—';
-  const at=document.getElementById('qat').value||'—';
-  const em=document.getElementById('qem').value||'';
-  const pg=document.getElementById('qpg').value;
-  const {neto,iva,total}=calcQuoteTotals(items);
-  const cr=state.CLIS.find(c=>c.nombre===cl);
-  const payload={cliente_id:cr?.id||null,cliente_nombre:cl,cliente_rut:rt,cliente_contacto:at,cliente_email:em,forma_pago:pg,estado,neto,iva,total,creado_por:state.ME.id};
-
-  let cot=null,lastError=null;
-  for(let attempt=0;attempt<3;attempt++){
-    const numero=state.QNUM;
-    const{data,error}=await sb.from('cotizaciones').insert({numero,...payload}).select().single();
-    if(!error){cot=data;break;}
-    lastError=error;
-    if(error.code==='23505'||(error.message||'').toLowerCase().includes('duplicate')){
-      console.warn('state.QNUM '+state.QNUM+' ya existe, reintentando con número fresco…');
-      await loadQNum();
-      continue;
-    }
-    if((error.message||'').includes('creado_por_fkey')||(error.message||'').includes('creado_por')){
-      showToast('❌ Tu usuario no está registrado en la tabla usuarios. Avisá al admin.');
-      console.error('FK error en creado_por. state.ME.id =',state.ME.id,'— hay que insertarlo en tabla usuarios.');
-      return null;
-    }
-    break;
-  }
-  if(!cot){
-    const msg=lastError?lastError.message:'Error desconocido';
-    showToast('❌ '+msg);
-    console.error('saveQ falló tras reintentos:',lastError);
-    return null;
-  }
-
-  state.QNUM=Math.max(state.QNUM,Number(cot.numero)+1);
-  document.getElementById('qnum').textContent='#'+state.QNUM;
-
-  const rows=items.map(i=>({
-    cotizacion_id:cot.id,
-    producto_id:i.tipo==='n'?i.id:null,
-    descripcion:i.tipo==='n'?(i.prod.marca+' '+(i.prod.descripcion||'')):i.prod.nm,
-    marca:i.tipo==='n'?i.prod.marca:'SERVICIO',
-    cantidad:i.qty,precio_unit:i.up,total:i.up*i.qty,
-  }));
-  const{error:itemsErr}=await sb.from('cotizacion_items').insert(rows);
-  if(itemsErr){console.error('Error insertando items (cotizacion ya guardada):',itemsErr);showToast('⚠️ Cotización guardada pero items fallaron: '+itemsErr.message);}
-  return {...cot,neto,iva,total};
-}
-
-async function sendAppr(){
-  if(state.QUOTE_BUSY)return;
-  const qSnap=snapshotQ();
-  if(!qSnap.length){showToast('Agregá productos o servicios antes de enviar.');return;}
-  const btn=document.getElementById('bapr');
-  const old=btn?btn.innerHTML:'';
-  setQuoteBusy(true);
-  if(btn)btn.textContent='Enviando...';
-  try{
-    const c=await saveQ('pendiente',qSnap);
-    if(c){
-      showToast('✓ Enviada para aprobación');
-      await clearQ(true,{syncNum:true});
-      try{await loadABadge();}catch(e){console.error('loadABadge error:',e);}
-    }
-  }catch(e){
-    showToast('Error: '+e.message);
-    console.error('sendAppr error:',e);
-  }finally{
-    if(btn)btn.innerHTML=old;
-    setQuoteBusy(false);
-  }
-}
 
 // buildPDF, buildFichaPage se importan desde ./core/pdf.js
 
-function openPDF(html, email='', num='', showSend=false, clearOnClose=false) {
-  state.PREVIEW_PDF_HTML = html || '';
-  state.PREVIEW_EMAIL = email || '';
-  state.PREVIEW_NUM = num || '';
-  state.PREVIEW_SHOULD_CLEAR_Q = !!clearOnClose;
 
-  const downloadBtn=document.getElementById('btn-download-pdf');
-  if(downloadBtn){downloadBtn.disabled=false;downloadBtn.textContent='💾 PDF';}
-  const sendBtn = document.getElementById('btn-send-email');
-  if(sendBtn){
-    sendBtn.disabled=false;
-    sendBtn.style.display = (showSend && email) ? 'inline-block' : 'none';
-    sendBtn.textContent = '✉️ Enviar';
-  }
-
-  const previewDiv = document.getElementById('pdf-preview-div');
-  previewDiv.innerHTML = '<iframe id="pdf-iframe" sandbox="allow-same-origin" style="width:100%;height:100%;border:none;background:white;"></iframe>';
-  const iframe = document.getElementById('pdf-iframe');
-  iframe.srcdoc = state.PREVIEW_PDF_HTML;
-
-  document.getElementById('pdf-modal-title').textContent = 'Cotización #' + (num||'');
-  document.getElementById('pdf-modal').style.display = 'flex';
-}
-
-async function closePDFModal() {
-  const shouldClear=state.PREVIEW_SHOULD_CLEAR_Q;
-  document.getElementById('pdf-modal').style.display = 'none';
-  document.getElementById('pdf-preview-div').innerHTML = '';
-  state.PREVIEW_PDF_HTML='';state.PREVIEW_EMAIL='';state.PREVIEW_NUM='';state.PREVIEW_SHOULD_CLEAR_Q=false;
-  const sendBtn=document.getElementById('btn-send-email');
-  if(sendBtn){sendBtn.disabled=false;sendBtn.style.display='none';sendBtn.textContent='✉️ Enviar';}
-  const dlBtn=document.getElementById('btn-download-pdf');
-  if(dlBtn){dlBtn.disabled=false;dlBtn.textContent='💾 PDF';}
-  if(shouldClear)await clearQ(true,{syncNum:true});
-}
 
 function initGmailToken() {}
 
@@ -453,145 +187,10 @@ function closeSidebar() {
 function toggleMobCart() {
   document.querySelector('.qp').classList.toggle('mob-open');
 }
-function updateMobCart() {
-  var badge = document.getElementById('mob-cart-n');
-  var btn = document.getElementById('mob-cart');
-  if (!badge || !btn) return;
-  if (state.Q.length > 0) {
-    badge.textContent = state.Q.length;
-    badge.style.display = 'flex';
-  } else {
-    badge.style.display = 'none';
-  }
-}
-
-async function downloadPDF() {
-  if (!state.PREVIEW_PDF_HTML) return;
-  const btn = document.getElementById('btn-download-pdf');
-  btn.disabled = true; btn.textContent = '📄 Generando...';
-  try {
-    const container = document.createElement('div');
-    container.innerHTML = state.PREVIEW_PDF_HTML;
-    container.style.width = '210mm';
-    document.body.appendChild(container);
-    await html2pdf().set({
-      margin: 0,
-      filename: 'Cotizacion_' + state.PREVIEW_NUM + '_SCN.pdf',
-      image: { type: 'jpeg', quality: 0.95 },
-      html2canvas: { scale: 2, useCORS: true, letterRendering: true },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-    }).from(container).save();
-    document.body.removeChild(container);
-    btn.textContent = '💾 Descargar PDF';
-    btn.disabled = false;
-  } catch(e) {
-    showToast('Error: ' + e.message);
-    btn.textContent = '💾 Descargar PDF';
-    btn.disabled = false;
-  }
-}
-
-async function sendEmailFromPreview() {
-  if (!state.PREVIEW_EMAIL) { showToast('No hay email del cliente'); return; }
-  const btn = document.getElementById('btn-send-email');
-  btn.disabled = true; btn.textContent = '📄 Generando PDF...';
-  try {
-    const container = document.createElement('div');
-    container.innerHTML = state.PREVIEW_PDF_HTML;
-    container.style.width = '210mm';
-    document.body.appendChild(container);
-    const pdfBlob = await html2pdf().set({
-      margin: 0,
-      filename: 'Cotizacion_' + state.PREVIEW_NUM + '_SCN.pdf',
-      image: { type: 'jpeg', quality: 0.95 },
-      html2canvas: { scale: 2, useCORS: true, letterRendering: true },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-    }).from(container).outputPdf('blob');
-    document.body.removeChild(container);
-
-    const pdfBase64 = await new Promise(function(resolve, reject) {
-      const reader = new FileReader();
-      reader.onload = function() { resolve(reader.result.split(',')[1]); };
-      reader.onerror = reject;
-      reader.readAsDataURL(pdfBlob);
-    });
-
-    btn.textContent = '✉️ Enviando...';
-
-    const body = {
-      from: EMAIL_FROM,
-      to: [state.PREVIEW_EMAIL],
-      reply_to: EMAIL_REPLY_TO,
-      subject: 'Cotización #' + state.PREVIEW_NUM + ' - SCN Neumáticos',
-      html: '<p>Estimado cliente,</p><p>Adjuntamos la cotización <strong>#' + state.PREVIEW_NUM + '</strong> de SCN Neumáticos.</p><p>Para confirmar o consultar, responda este correo.</p><br><p>Saludos,<br><strong>Equipo SCN Neumáticos</strong><br>Tel: 228448878 / +569 9632 1722<br>Carretera General San Martín 9360, Bodega 6, Quilicura</p>',
-      attachments: [{
-        filename: 'Cotizacion_' + state.PREVIEW_NUM + '_SCN.pdf',
-        content: pdfBase64,
-        type: 'application/pdf',
-      }]
-    };
-
-    const res = await fetch(SB_URL + '/functions/v1/send-email', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + SB_KEY,
-      },
-      body: JSON.stringify(body)
-    });
-
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.message || 'Error al enviar');
-
-    showToast('✓ Email enviado a ' + state.PREVIEW_EMAIL);
-    btn.textContent = '✓ Enviado';
-  } catch(e) {
-    showToast('Error: ' + e.message);
-    btn.disabled = false;
-    btn.textContent = '✉️ Enviar al cliente';
-  }
-}
 
 
-async function genPDF(){
-  if(state.QUOTE_BUSY)return;
-  const qSnap=snapshotQ();
-  if(!qSnap.length){showToast('Agregá productos o servicios antes de generar PDF.');return;}
-  const btn=document.getElementById('bpdf');
-  const old=btn?btn.innerHTML:'';
-  setQuoteBusy(true);
-  if(btn)btn.textContent='Generando...';
-  try{
-    const cot=await saveQ('borrador',qSnap);
-    if(!cot)return;
-    const email=document.getElementById('qem').value||cot.cliente_email||'';
-    const modelMap={};
-    qSnap.filter(i=>i.tipo==='n'&&i.prod.modelo&&i.prod.marca).forEach(i=>{
-      const key=i.prod.marca+'|'+i.prod.modelo+'|'+(i.prod.medida||'');
-      if(!modelMap[key])modelMap[key]={marca:i.prod.marca,modelo:i.prod.modelo,medida:i.prod.medida||'',prod:i.prod};
-    });
-    let fichasHTML='';
-    if(Object.keys(modelMap).length>0){
-      const{data:fichas,error:fichasErr}=await sb.from('fichas_tecnicas').select('*');
-      if(fichasErr)console.error('Error cargando fichas para PDF:',fichasErr);
-      Object.values(modelMap).forEach(m=>{
-        const f=fichas?.find(ft=>ft.marca===m.marca&&ft.modelo===m.modelo&&(ft.medida||'')===(m.medida||''));
-        fichasHTML+=buildFichaPage(f||{marca:m.marca,modelo:m.modelo,medida:m.medida,segmento:m.prod.tipo_vehiculo||'CAMION',aplicacion:m.prod.tipo_uso||''},[m.prod],fichas||[]);
-      });
-    }
-    const totals=calcQuoteTotals(qSnap);
-    const pdfHTML=buildPDF({...cot,...totals},qSnap);
-    const fullHTML=fichasHTML?pdfHTML.replace('</body></html>',fichasHTML+'</body></html>'):pdfHTML;
-    openPDF(fullHTML,email,cot.numero,!!email,true);
-    showToast('Vista previa lista'+(fichasHTML?' (con fichas técnicas)':''));
-  }catch(e){
-    showToast('Error al generar PDF: '+e.message);
-    console.error('genPDF error:',e);
-  }finally{
-    if(btn)btn.innerHTML=old;
-    setQuoteBusy(false);
-  }
-}
+
+
 
 async function loadMis(){
   const today=new Date().toISOString().split('T')[0];
