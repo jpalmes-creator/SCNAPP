@@ -9,6 +9,7 @@
 import { initSentry, setSentryUser, captureError } from './core/sentry.js';
 import { sb } from './core/supabase.js';
 import { state, clearPreview, setPreview } from './core/state.js';
+import { initAuth, doLogin, doLogout, setAuthHandlers } from './core/auth.js';
 import { showToast, openModal, closeModal } from './core/ui.js';
 import { $$, compImg, f2b64, cleanPathPart, uniqueJpgPath } from './core/utils.js';
 import { SCN_LOGO } from './core/logo.js';
@@ -37,65 +38,10 @@ const SVCS=[
   {id:'s8',nm:'Rotación neumáticos',          pr:18000,ic:'🔄'},
 ];
 
-async function init(){
-  initGmailToken();
-  loadLS();
-  const{data:{session}}=await sb.auth.getSession();
-  if(session)await onLogin(session.user);
-  sb.auth.onAuthStateChange(async(ev,sess)=>{
-    if(ev==='SIGNED_IN'&&sess)await onLogin(sess.user);
-    if(ev==='SIGNED_OUT')showLogin();
-  });
-}
 
-async function loadLS(){
-  try{
-    const[p,c,s]=await Promise.all([
-      sb.from('productos').select('id',{count:'exact',head:true}),
-      sb.from('clientes').select('id',{count:'exact',head:true}),
-      sb.from('stock').select('cantidad'),
-    ]);
-    document.getElementById('ls-p').textContent=(p.count||0).toLocaleString('es-CL');
-    document.getElementById('ls-c').textContent=(c.count||0).toLocaleString('es-CL');
-    document.getElementById('ls-s').textContent=(s.data||[]).reduce((a,r)=>a+(r.cantidad||0),0).toLocaleString('es-CL');
-  }catch(e){}
-}
 
-async function doLogin(){
-  const em=document.getElementById('le').value.trim();
-  const pw=document.getElementById('lp').value;
-  if(!em||!pw){showErr('Completa todos los campos');return;}
-  const btn=document.getElementById('blg');
-  btn.disabled=true;btn.textContent='Ingresando...';
-  document.getElementById('lerr').style.display='none';
-  const{error}=await sb.auth.signInWithPassword({email:em,password:pw});
-  if(error){showErr('Correo o contraseña incorrectos');btn.disabled=false;btn.textContent='Ingresar';}
-}
-function showErr(m){const e=document.getElementById('lerr');e.textContent=m;e.style.display='block';}
-async function doLogout(){await sb.auth.signOut();}
 
-async function onLogin(user){
-  state.ME=user;
-  setSentryUser(user); // asocia el usuario logueado al error tracking
-  for(let i=0;i<3;i++){
-    const{data}=await sb.from('usuarios').select('*').eq('id',user.id).maybeSingle();
-    if(data){state.ROLE=data.rol||'vendedor';state.UNAME=data.nombre||user.email.split('@')[0];break;}
-    await new Promise(r=>setTimeout(r,500));
-  }
-  if(!state.ROLE){
-    const em=user.email.toLowerCase();
-    if(em==='pablo@scnchile.com'){state.ROLE='gerente';state.UNAME='Pablo';}
-    else if(em==='juan.palmess@gmail.com'){state.ROLE='admin';state.UNAME='JP';}
-    else{state.ROLE='vendedor';state.UNAME=em.split('@')[0];}
-  }
-  showApp();
-}
 
-function showLogin(){
-  document.getElementById('login').style.display='flex';
-  document.getElementById('app').style.display='none';
-  const b=document.getElementById('blg');b.disabled=false;b.textContent='Ingresar';
-}
 
 async function showApp(){
   document.getElementById('login').style.display='none';
@@ -1447,7 +1393,14 @@ async function saveFic(){
   if(_ficqReturnAfterSave){_ficqReturnAfterSave=false;setTimeout(renderFicQ,300);}
 }
 
-init();
+// Conectar el ciclo de vida de auth con el bootstrap de la app
+// (initAuth() se llama al final, después de exponer funciones a window)
+setAuthHandlers({
+  onLoggedIn: showApp,
+  onLoggedOut: () => {
+    // El estado de auth se limpia adentro de showLogin().
+  },
+});
 
 // ============================================================
 // EXPONER FUNCIONES A WINDOW
@@ -1477,3 +1430,6 @@ Object.assign(window, {
   // Dashboard
   loadDash
 });
+
+// Bootstrap de la app — arranca la verificación de sesión
+initAuth();
