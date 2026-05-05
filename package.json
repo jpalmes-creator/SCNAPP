@@ -1,0 +1,15 @@
+{
+  "name": "scn-app",
+  "version": "0.1.0",
+  "description": "SCN — Sistema de Cotización de Neumáticos",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "^5.4.10"
+  }
+}
