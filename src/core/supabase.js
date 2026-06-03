@@ -54,14 +54,10 @@ setInterval(() => {
   sb.auth.refreshSession().catch(e => console.warn('[supabase] refresh failed:', e.message));
 }, 5 * 60 * 1000);
 
-// Cuando la pestaña vuelve a primer plano, refrescamos la sesión inmediatamente
-// (cubre el caso clásico de "abrí la app, dejé el tab inactivo, volví y no responde")
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') {
-    console.log('[supabase] tab visible — refreshing session');
-    sb.auth.refreshSession().catch(e => console.warn('[supabase] refresh on visibility failed:', e.message));
-  }
-});
+// Nota: NO refrescamos sesión en visibilitychange. Abrir el modal de PDF dispara
+// visibility hidden→visible, eso lanzaba refreshSession → SIGNED_IN → onLogin
+// re-corría queries pesadas y dejaba el siguiente insert colgado 10s.
+// El intervalo de 5min de arriba + autoRefreshToken son suficientes.
 
 /**
  * Helper: envuelve una promesa con timeout. Si no completa en `ms`,

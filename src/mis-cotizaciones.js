@@ -27,7 +27,7 @@ export async function loadMis() {
     <td class="mn">${$$(c.total)}</td>
     <td><span class="bdg b${c.estado === 'pendiente' ? 'pend' : c.estado === 'aprobada' ? 'aprov' : c.estado === 'rechazada' ? 'rech' : 'borr'}">${c.estado.toUpperCase()}</span></td>
     <td>${new Date(c.created_at).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}</td>
-    <td><button onclick="previewCot(${c.id})" style="background:none;border:none;cursor:pointer;font-size:16px;color:var(--g500);" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--g500)'">📄</button></td>
+    <td><button onclick="previewCot(${c.id})" style="background:none;border:none;cursor:pointer;font-size:16px;color:var(--g500);" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--g500)'">📄</button><button onclick="delCot(${c.id},'${c.numero}')" style="background:none;border:none;cursor:pointer;font-size:16px;color:var(--g500);margin-left:6px" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--g500)'" title="Eliminar">🗑️</button></td>
   </tr>`).join('');
   const b = document.getElementById('nb-m');
   if (b) { b.textContent = data.length; b.style.display = 'inline-block'; }
@@ -51,6 +51,14 @@ export async function loadAll() {
     <td class="mn">${$$(c.total)}</td>
     <td><span class="bdg b${c.estado === 'pendiente' ? 'pend' : c.estado === 'aprobada' ? 'aprov' : c.estado === 'rechazada' ? 'rech' : 'borr'}">${c.estado.toUpperCase()}</span></td>
     <td style="font-size:11px">${new Date(c.created_at).toLocaleDateString('es-CL')}</td>
-    <td><button onclick="previewCot(${c.id})" style="background:none;border:none;cursor:pointer;font-size:16px;color:var(--g500);" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--g500)'">📄</button></td>
+    <td><button onclick="previewCot(${c.id})" style="background:none;border:none;cursor:pointer;font-size:16px;color:var(--g500);" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--g500)'">📄</button><button onclick="delCot(${c.id},'${c.numero}', true)" style="background:none;border:none;cursor:pointer;font-size:16px;color:var(--g500);margin-left:6px" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--g500)'" title="Eliminar">🗑️</button></td>
   </tr>`).join('');
+}
+
+export async function delCot(id, num, all = false) {
+  if (!confirm('¿Eliminar la cotización #' + num + '? Esta acción no se puede deshacer.')) return;
+  await sb.from('cotizacion_items').delete().eq('cotizacion_id', id);
+  const { error } = await sb.from('cotizaciones').delete().eq('id', id);
+  if (error) { alert('Error al eliminar: ' + error.message); return; }
+  if (all) loadAll(); else loadMis();
 }

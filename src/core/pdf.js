@@ -89,7 +89,11 @@ export function buildFichaPage(f, prods, allFichas){
   const pc=posColor[f.aplicacion]||'#64748B';
   const pb=posBg[f.aplicacion]||'#F1F5F9';
   // Foto es por modelo — si esta ficha no tiene, buscar en otra del mismo modelo
-  const imgUrl=f.imagen_url||(allFichas||[]).find(x=>x.marca===f.marca&&x.modelo===f.modelo&&x.imagen_url)?.imagen_url||null;
+  // Prioridad: imagen propia de la ficha → imagen de otra ficha del mismo modelo → foto del producto
+  const imgUrl=f.imagen_url
+    ||(allFichas||[]).find(x=>x.marca===f.marca&&x.modelo===f.modelo&&x.imagen_url)?.imagen_url
+    ||(prods||[]).find(p=>p&&p.foto_url)?.foto_url
+    ||null;
   const isCamion=f.segmento==='CAMION';
   let rows='';
   const addRow=(label,val,bg)=>{rows+=`<tr style="background:${bg?'#F8FAFC':'white'};"><td style="padding:8px 12px;font-size:10px;font-weight:700;color:#64748B;border-bottom:1px solid #E2E8F0;width:40%;">${label}</td><td style="padding:8px 12px;font-size:12px;font-weight:600;color:${val?'#0F172A':'#CBD5E1'};${val?'':'font-style:italic;'}border-bottom:1px solid #E2E8F0;">${val||'Por completar'}</td></tr>`;};

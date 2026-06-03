@@ -49,7 +49,7 @@ import {
   loadApr, loadABadge, upAI, dlAPDF, aprQ, rejQ, previewCot,
 } from './aprobaciones.js';
 import { loadDash } from './dashboard.js';
-import { loadMis, loadAll } from './mis-cotizaciones.js';
+import { loadMis, loadAll, delCot } from './mis-cotizaciones.js';
 import { handleImpFile, registerImportHandlers } from './importar.js';
 import { go, toggleSidebar, toggleMobCart, initGmailToken } from './router.js';
 import { showToast, openModal, closeModal } from './core/ui.js';
@@ -221,7 +221,7 @@ Object.assign(window, {
   // Fichas técnicas
   openFicModal, openEditFic, openFicQ, saveFic, cancelFic, ficSegChange, setFicSeg, upFicImg, fFic,
   // Aprobaciones / cotizaciones
-  aprQ, rejQ, previewCot, dlAPDF,
+  aprQ, rejQ, previewCot, dlAPDF, delCot,
   // PDF / email
   downloadPDF, sendEmailFromPreview,
   // Importar

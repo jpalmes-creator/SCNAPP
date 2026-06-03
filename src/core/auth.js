@@ -191,7 +191,15 @@ export async function initAuth() {
   const { data: { session } } = await sb.auth.getSession();
   if (session) await onLogin(session.user);
   sb.auth.onAuthStateChange(async (ev, sess) => {
-    if (ev === 'SIGNED_IN' && sess) await onLogin(sess.user);
+    // Ignorar TOKEN_REFRESHED y SIGNED_IN repetidos (visibility refresh dispara
+    // SIGNED_IN para el mismo user → re-corría onLogin y bloqueaba requests).
+    if (ev === 'SIGNED_IN' && sess) {
+      if (state.ME && state.ME.id === sess.user.id) {
+        console.log('[auth] SIGNED_IN ignorado (mismo usuario, refresh)');
+        return;
+      }
+      await onLogin(sess.user);
+    }
     if (ev === 'SIGNED_OUT') showLogin();
   });
 }

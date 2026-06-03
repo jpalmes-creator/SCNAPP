@@ -76,7 +76,7 @@ export async function downloadPDF() {
   try {
     const container = document.createElement('div');
     container.innerHTML = state.PREVIEW_PDF_HTML;
-    container.style.width = '210mm';
+    container.style.width = '200mm';
     document.body.appendChild(container);
     await window.html2pdf().set({
       margin: 0,
@@ -104,7 +104,7 @@ export async function sendEmailFromPreview() {
   try {
     const container = document.createElement('div');
     container.innerHTML = state.PREVIEW_PDF_HTML;
-    container.style.width = '210mm';
+    container.style.width = '200mm';
     document.body.appendChild(container);
     const pdfBlob = await window.html2pdf().set({
       margin: 0,
